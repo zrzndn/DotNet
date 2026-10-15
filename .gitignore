@@ -6,6 +6,11 @@
 # dotenv files
 .env
 
+# Local SQLite database
+opshub.db
+opshub.db-shm
+opshub.db-wal
+
 # User-specific files
 *.rsuser
 *.suo

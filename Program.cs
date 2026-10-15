@@ -1,6 +1,17 @@
 using OpsHub.Components;
+using Microsoft.EntityFrameworkCore;
+using OpsHub.Data;
 
 var builder = WebApplication.CreateBuilder(args);
+
+
+var dbPath = Path.Combine(
+    builder.Environment.ContentRootPath,
+    "opshub.db");
+
+builder.Services.AddDbContextFactory<OpsHubDbContext>(
+    options => options.UseSqlite($"Data Source={dbPath}"));
+
 
 // Add services to the container.
 builder.Services.AddRazorComponents()

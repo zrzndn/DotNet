@@ -1,5 +1,9 @@
 ﻿
 @page "/"
+@using Microsoft.EntityFrameworkCore
+@using OpsHub.Data
+@using OpsHub.Models
+@inject IDbContextFactory<OpsHubDbContext> DbFactory
 
 <PageTitle>OpsHub | Dashboard</PageTitle>
 
@@ -62,38 +66,127 @@
                             <th>Ticket</th>
                             <th>Priority</th>
                             <th>Status</th>
+        	            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach (var ticket in FilteredTickets)
-                        {
-                            <tr @key="ticket.Id">
-                                <td>
-                                    <strong>#@ticket.Id</strong>
-                                    <div class="ticket-title">@ticket.Title</div>
-                                    <span class="ticket-category">@ticket.Category</span>
-                                </td>
-                                <td>
-                                    <span class="@GetPriorityClass(ticket.Priority)">
-                                        @ticket.Priority
-                                    </span>
-                                </td>
-                                <td>
-                                    <span class="@GetStatusClass(ticket.Status)">
-                                        @ticket.Status
-                                    </span>
-                                </td>
-                            </tr>
-                        }
+                       
+@foreach (var ticket in FilteredTickets)
+{
+    <tr @key="ticket.Id">
+        <td>
+            <strong>#@ticket.Id</strong>
+            <div class="ticket-title">@ticket.Title</div>
+            <span class="ticket-category">@ticket.Category</span>
+        </td>
 
-                        @if (!FilteredTickets.Any())
-                        {
-                            <tr>
-                                <td colspan="3" class="empty-state">
-                                    No matching tickets found.
-                                </td>
-                            </tr>
-                        }
+        <td>
+            <span class="@GetPriorityClass(ticket.Priority)">
+                @ticket.Priority
+            </span>
+        </td>
+
+        <td>
+            <select class="status-select"
+                    value="@ticket.Status"
+                    aria-label="Change ticket status"
+                    @onchange="(ChangeEventArgs e) => UpdateTicketStatusAsync(ticket.Id, e)">
+                <option value="Open">Open</option>
+                <option value="In Progress">In Progress</option>
+                <option value="Resolved">Resolved</option>
+            </select>
+        </td>
+
+        <td>
+            <div class="action-buttons">
+                <button type="button"
+                        class="secondary-button"
+                        @onclick="() => BeginEdit(ticket)">
+                    Edit
+                </button>
+
+                <button type="button"
+                        class="danger-button"
+                        @onclick="() => RequestDelete(ticket.Id)">
+                    Delete
+                </button>
+            </div>
+
+            @if (deleteConfirmationId == ticket.Id)
+            {
+                <div class="delete-confirm">
+                    <p>Delete ticket #@ticket.Id?</p>
+
+                    <button type="button"
+                            class="danger-button"
+                            @onclick="() => DeleteTicketAsync(ticket.Id)">
+                        Confirm
+                    </button>
+
+                    <button type="button"
+                            class="secondary-button"
+                            @onclick="CancelDelete">
+                        Cancel
+                    </button>
+                </div>
+            }
+        </td>
+    </tr>
+
+    @if (editingTicketId == ticket.Id)
+    {
+        <tr>
+            <td colspan="4">
+                <div class="edit-ticket-form">
+                    <h3>Edit ticket #@ticket.Id</h3>
+
+                    <label>Title</label>
+                    <input class="form-control"
+                           @bind="editTitle"
+                           maxlength="200" />
+
+                    <label>Category</label>
+                    <select class="form-control" @bind="editCategory">
+                        <option>Hardware</option>
+                        <option>Network</option>
+                        <option>Software</option>
+                        <option>Access and Accounts</option>
+                    </select>
+
+                    <label>Priority</label>
+                    <select class="form-control" @bind="editPriority">
+                        <option>Low</option>
+                        <option>Medium</option>
+                        <option>High</option>
+                        <option>Critical</option>
+                    </select>
+
+                    <button type="button"
+                            class="primary-button"
+                            @onclick="SaveEditAsync">
+                        Save changes
+                    </button>
+
+                    <button type="button"
+                            class="secondary-button"
+                            @onclick="CancelEdit">
+                        Cancel
+                    </button>
+                </div>
+            </td>
+        </tr>
+    }
+}
+
+@if (!FilteredTickets.Any())
+{
+    <tr>
+        <td colspan="4" class="empty-state">
+            No matching tickets found.
+        </td>
+    </tr>
+}
+
                     </tbody>
                 </table>
             </div>
@@ -142,11 +235,13 @@
 
             @if (!string.IsNullOrEmpty(feedback))
             {
-                <p class="success-message" role="status">@feedback</p>
+                <p class="@(isError ? "error-message" : "success-message")" role="status">
+    @feedback
+</p>
             }
 
             <p class="demo-note">
-                Demo mode: tickets are stored in memory and reset when the app restarts.
+    Data is stored locally in SQLite and persists across restarts.
             </p>
         </article>
     </section>
@@ -157,6 +252,68 @@
 </div>
 
 <style>
+
+
+.status-select {
+    min-width: 140px;
+    margin-bottom: 0;
+}
+
+.action-buttons {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.secondary-button,
+.danger-button {
+    border: 1px solid #34445b;
+    border-radius: 7px;
+    padding: 8px 10px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.secondary-button {
+    color: #dce6f5;
+    background: #26364d;
+}
+
+.danger-button {
+    color: #ffd1d1;
+    background: #512c35;
+}
+
+.secondary-button:hover {
+    background: #344963;
+}
+
+.danger-button:hover {
+    background: #733742;
+}
+
+.delete-confirm,
+.edit-ticket-form {
+    margin-top: 12px;
+    padding: 14px;
+    background: #0e1623;
+    border: 1px solid #34445b;
+    border-radius: 8px;
+}
+
+.edit-ticket-form label {
+    display: block;
+    margin: 12px 0 6px;
+}
+
+.edit-ticket-form h3 {
+    margin-top: 0;
+}
+
+.error-message {
+    color: #ff9292;
+    font-size: 13px;
+}
     .opshub {
         color: #e8edf5;
         padding: 28px;
@@ -378,7 +535,122 @@
         .page-header { align-items: flex-start; flex-direction: column; }
         .opshub { padding: 16px; }
     }
+
+    
+/* Cleaner ticket table */
+.table-wrapper {
+    overflow-x: auto;
+    border: 1px solid #28364a;
+    border-radius: 10px;
+}
+
+table {
+    width: 100%;
+    min-width: 740px;
+    border-collapse: separate;
+    border-spacing: 0;
+    table-layout: fixed;
+    text-align: left;
+    font-size: 13px;
+}
+
+thead {
+    background: #101827;
+}
+
+th {
+    color: #91a1b7;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    font-weight: 700;
+    padding: 14px 12px;
+    border-bottom: 1px solid #34445b;
+}
+
+td {
+    padding: 15px 12px;
+    border-bottom: 1px solid #263247;
+    vertical-align: middle;
+    overflow-wrap: anywhere;
+}
+
+tbody tr:last-child > td {
+    border-bottom: none;
+}
+
+tbody tr:hover {
+    background: rgba(124, 167, 255, 0.035);
+}
+
+/* Give each column appropriate space */
+thead th:nth-child(1) { width: 42%; }
+thead th:nth-child(2) { width: 14%; }
+thead th:nth-child(3) { width: 19%; }
+thead th:nth-child(4) { width: 25%; }
+
+/* Compact dropdown suited to a table */
+.status-select {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 120px;
+    margin: 0;
+    padding: 9px 8px;
+    color: #dce6f5;
+    background: #0e1623;
+    border: 1px solid #34445b;
+    border-radius: 7px;
+    font-size: 12px;
+}
+
+.status-select:focus {
+    outline: 2px solid #6e9dff;
+    outline-offset: 1px;
+}
+
+/* Consistent row actions */
+.action-buttons {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.secondary-button,
+.danger-button {
+    padding: 8px 10px;
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: background 0.15s ease;
+}
+
+.edit-ticket-form {
+    max-width: 560px;
+    margin: 8px auto;
+    padding: 20px;
+    background: #101827;
+    border: 1px solid #34445b;
+    border-radius: 12px;
+}
+
+.delete-confirm {
+    margin-top: 10px;
+    padding: 12px;
+    background: #101827;
+    border: 1px solid #512c35;
+    border-radius: 8px;
+}
+
+.empty-state {
+    text-align: center;
+    color: #9ba8ba;
+    padding: 32px 12px;
+}
+
 </style>
+
 
 @code {
     private string searchTerm = "";
@@ -386,39 +658,347 @@
     private string newTicketCategory = "Hardware";
     private string newTicketPriority = "Medium";
     private string feedback = "";
-    private int nextTicketId = 104;
+    private bool isError = false;
+private int? editingTicketId;
+private int? deleteConfirmationId;
 
-    private List<SupportTicket> tickets = new()
+private string editTitle = "";
+private string editCategory = "Hardware";
+private string editPriority = "Medium";
+
+    private List<SupportTicket> tickets = new();
+
+    protected override async Task OnInitializedAsync()
     {
-        new(103, "VPN connection failing", "Network", "High", "Open"),
-        new(102, "Install approved development tools", "Software", "Medium", "In Progress"),
-        new(101, "Reset account access", "Access and Accounts", "Low", "Resolved")
-    };
+        try
+        {
+            await using var db =
+                await DbFactory.CreateDbContextAsync();
+
+            // Insert demo records only when the database is empty.
+            if (!await db.SupportTickets.AnyAsync())
+            {
+                db.SupportTickets.AddRange(
+                    new SupportTicket
+                    {
+                        Title = "VPN connection failing",
+                        Category = "Network",
+                        Priority = "High",
+                        Status = "Open",
+                        CreatedAtUtc = DateTime.UtcNow.AddHours(-5)
+                    },
+                    new SupportTicket
+                    {
+                        Title = "Install development tools",
+                        Category = "Software",
+                        Priority = "Medium",
+                        Status = "In Progress",
+                        CreatedAtUtc = DateTime.UtcNow.AddHours(-3)
+                    },
+                    new SupportTicket
+                    {
+                        Title = "Reset account access",
+                        Category = "Access and Accounts",
+                        Priority = "Low",
+                        Status = "Resolved",
+                        CreatedAtUtc = DateTime.UtcNow.AddHours(-1)
+                    }
+                );
+
+                await db.SaveChangesAsync();
+            }
+
+            tickets = await db.SupportTickets
+                .OrderByDescending(t => t.CreatedAtUtc)
+                .ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(
+                $"Could not load tickets: {ex}");
+
+            feedback = "Could not load tickets. Check the application logs.";
+            isError = true;
+        }
+    }
 
     private IEnumerable<SupportTicket> FilteredTickets =>
         tickets.Where(ticket =>
             string.IsNullOrWhiteSpace(searchTerm) ||
-            ticket.Title.Contains(searchTerm, StringComparison.OrdinalIgnoreCase) ||
-            ticket.Id.ToString().Contains(searchTerm, StringComparison.OrdinalIgnoreCase));
+            ticket.Title.Contains(
+                searchTerm,
+                StringComparison.OrdinalIgnoreCase) ||
+            ticket.Id.ToString().Contains(
+                searchTerm,
+                StringComparison.OrdinalIgnoreCase));
 
-    private void CreateTicket()
+    private async Task CreateTicket()
     {
-        if (string.IsNullOrWhiteSpace(newTicketTitle))
+        feedback = "";
+        isError = false;
+
+        var title = newTicketTitle.Trim();
+
+        if (string.IsNullOrWhiteSpace(title))
         {
-            feedback = "Enter a description first.";
+            feedback = "Enter a ticket description.";
+            isError = true;
             return;
         }
 
-        tickets.Insert(0, new SupportTicket(
-            nextTicketId++,
-            newTicketTitle.Trim(),
-            newTicketCategory,
-            newTicketPriority,
-            "Open"));
+        if (title.Length > 200)
+        {
+            feedback = "Description cannot exceed 200 characters.";
+            isError = true;
+            return;
+        }
 
-        newTicketTitle = "";
-        feedback = "Ticket created successfully.";
+        var allowedCategories = new[]
+        {
+            "Hardware",
+            "Network",
+            "Software",
+            "Access and Accounts"
+        };
+
+        var allowedPriorities = new[]
+        {
+            "Low",
+            "Medium",
+            "High",
+            "Critical"
+        };
+
+        if (!allowedCategories.Contains(newTicketCategory) ||
+            !allowedPriorities.Contains(newTicketPriority))
+        {
+            feedback = "Choose a valid category and priority.";
+            isError = true;
+            return;
+        }
+
+        var ticket = new SupportTicket
+        {
+            Title = title,
+            Category = newTicketCategory,
+            Priority = newTicketPriority,
+            Status = "Open",
+            CreatedAtUtc = DateTime.UtcNow
+        };
+
+        try
+        {
+            await using var db =
+                await DbFactory.CreateDbContextAsync();
+
+            db.SupportTickets.Add(ticket);
+            await db.SaveChangesAsync();
+
+            // The database has now generated the ticket ID.
+            tickets.Insert(0, ticket);
+	    searchTerm = "";
+            newTicketTitle = "";
+            feedback = $"Ticket #{ticket.Id} saved successfully.";
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(
+                $"Could not save ticket: {ex}");
+
+            feedback = "Could not save the ticket. Check the application logs.";
+            isError = true;
+        }
     }
+
+
+private void BeginEdit(SupportTicket ticket)
+{
+    editingTicketId = ticket.Id;
+    deleteConfirmationId = null;
+
+    editTitle = ticket.Title;
+    editCategory = ticket.Category;
+    editPriority = ticket.Priority;
+
+    feedback = "";
+    isError = false;
+}
+
+private void CancelEdit()
+{
+    editingTicketId = null;
+}
+
+private void RequestDelete(int id)
+{
+    deleteConfirmationId = id;
+    editingTicketId = null;
+}
+
+private void CancelDelete()
+{
+    deleteConfirmationId = null;
+}
+
+private async Task SaveEditAsync()
+{
+    if (editingTicketId is not int id)
+        return;
+
+    var title = editTitle.Trim();
+
+    var categories = new[]
+    {
+        "Hardware", "Network", "Software", "Access and Accounts"
+    };
+
+    var priorities = new[]
+    {
+        "Low", "Medium", "High", "Critical"
+    };
+
+    if (string.IsNullOrWhiteSpace(title) || title.Length > 200)
+    {
+        feedback = "Title must contain 1–200 characters.";
+        isError = true;
+        return;
+    }
+
+    if (!categories.Contains(editCategory) ||
+        !priorities.Contains(editPriority))
+    {
+        feedback = "Select a valid category and priority.";
+        isError = true;
+        return;
+    }
+
+    try
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var entity = await db.SupportTickets
+            .FirstOrDefaultAsync(t => t.Id == id);
+
+        if (entity is null)
+        {
+            tickets.RemoveAll(t => t.Id == id);
+            editingTicketId = null;
+            feedback = "Ticket not found.";
+            isError = true;
+            return;
+        }
+
+        entity.Title = title;
+        entity.Category = editCategory;
+        entity.Priority = editPriority;
+
+        await db.SaveChangesAsync();
+
+        var displayed = tickets.FirstOrDefault(t => t.Id == id);
+        if (displayed is not null)
+        {
+            displayed.Title = title;
+            displayed.Category = editCategory;
+            displayed.Priority = editPriority;
+        }
+
+        editingTicketId = null;
+        feedback = $"Ticket #{id} updated successfully.";
+        isError = false;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Ticket update failed: {ex}");
+        feedback = "Unable to update the ticket. Check application logs.";
+        isError = true;
+    }
+}
+
+private async Task UpdateTicketStatusAsync(
+    int id, ChangeEventArgs args)
+{
+    var status = args.Value?.ToString();
+
+    var statuses = new[] { "Open", "In Progress", "Resolved" };
+
+    if (status is null || !statuses.Contains(status))
+    {
+        feedback = "Invalid ticket status.";
+        isError = true;
+        return;
+    }
+
+    try
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var entity = await db.SupportTickets
+            .FirstOrDefaultAsync(t => t.Id == id);
+
+        if (entity is null)
+        {
+            tickets.RemoveAll(t => t.Id == id);
+            feedback = "Ticket not found.";
+            isError = true;
+            return;
+        }
+
+        entity.Status = status;
+        await db.SaveChangesAsync();
+
+        var displayed = tickets.FirstOrDefault(t => t.Id == id);
+        if (displayed is not null)
+            displayed.Status = status;
+
+        feedback = $"Ticket #{id} status changed to {status}.";
+        isError = false;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Status update failed: {ex}");
+        feedback = "Unable to update status. Check application logs.";
+        isError = true;
+    }
+}
+
+private async Task DeleteTicketAsync(int id)
+{
+    try
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var entity = await db.SupportTickets
+            .FirstOrDefaultAsync(t => t.Id == id);
+
+        if (entity is null)
+        {
+            tickets.RemoveAll(t => t.Id == id);
+            feedback = "Ticket no longer exists.";
+            isError = true;
+        }
+        else
+        {
+            db.SupportTickets.Remove(entity);
+            await db.SaveChangesAsync();
+
+            tickets.RemoveAll(t => t.Id == id);
+            feedback = $"Ticket #{id} deleted successfully.";
+            isError = false;
+        }
+
+        if (editingTicketId == id)
+            editingTicketId = null;
+
+        deleteConfirmationId = null;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Ticket deletion failed: {ex}");
+        feedback = "Unable to delete the ticket. Check application logs.";
+        isError = true;
+    }
+}
+
 
     private static string GetStatusClass(string status) => status switch
     {
@@ -429,11 +1009,4 @@
 
     private static string GetPriorityClass(string priority) =>
         $"priority-pill priority-{priority.ToLowerInvariant()}";
-
-    private record SupportTicket(
-        int Id,
-        string Title,
-        string Category,
-        string Priority,
-        string Status);
 }
