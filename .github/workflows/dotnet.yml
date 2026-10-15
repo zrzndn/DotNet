@@ -1,0 +1,33 @@
+
+name: OpsHub CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and test OpsHub
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v7
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore OpsHub.csproj
+
+      - name: Build application
+        run: dotnet build OpsHub.csproj --configuration Release --no-restore
+
+      - name: Run unit tests
+        run: dotnet test tests/OpsHub.Tests/OpsHub.Tests.csproj --configuration Release
