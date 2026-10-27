@@ -1,0 +1,274 @@
+@page "/admin/users"
+@attribute [Authorize(Roles = "Admin")]
+@using System.ComponentModel.DataAnnotations
+@using Microsoft.AspNetCore.Components.Forms
+@using OpsHub.Services
+@inject UserAdminService UserAdmin
+
+<PageTitle>OpsHub | User administration</PageTitle>
+
+<div class="admin-page">
+    <header>
+        <p class="eyebrow">ADMINISTRATION</p>
+        <h1>User administration</h1>
+        <p>Manage accounts and service desk roles.</p>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(feedback))
+    {
+        <p class="notice @(isError ? "notice-error" : "notice-success")" role="status">@feedback</p>
+    }
+
+    <section class="admin-panel">
+        <h2>Create a user</h2>
+        <EditForm Model="newUser" OnValidSubmit="CreateUserAsync">
+            <DataAnnotationsValidator />
+            <ValidationSummary />
+            <div class="create-grid">
+                <div>
+                    <label for="user-name">Display name</label>
+                    <InputText id="user-name" class="form-control" @bind-Value="newUser.DisplayName" maxlength="150" />
+                    <ValidationMessage For="@(() => newUser.DisplayName)" />
+                </div>
+                <div>
+                    <label for="user-email">Email</label>
+                    <InputText id="user-email" class="form-control" @bind-Value="newUser.Email" />
+                    <ValidationMessage For="@(() => newUser.Email)" />
+                </div>
+                <div>
+                    <label for="user-password">Temporary password</label>
+                    <InputText id="user-password" class="form-control" @bind-Value="newUser.Password"
+                               type="password" autocomplete="new-password" />
+                    <ValidationMessage For="@(() => newUser.Password)" />
+                </div>
+                <div>
+                    <label for="user-role">Role</label>
+                    <InputSelect id="user-role" class="form-control" @bind-Value="newUser.Role">
+                        @foreach (var role in Roles)
+                        {
+                            <option value="@role">@role</option>
+                        }
+                    </InputSelect>
+                </div>
+            </div>
+            <div class="admin-actions">
+                <button class="admin-button" type="submit" disabled="@isSaving">
+                    @(isSaving ? "Creating..." : "Create account")
+                </button>
+                <span>Identity enforces the configured password rules.</span>
+            </div>
+        </EditForm>
+    </section>
+
+    <section class="admin-panel">
+        <div class="users-heading">
+            <div>
+                <h2>Accounts</h2>
+                <p>Role changes take effect after the user's next sign-in.</p>
+            </div>
+            <button type="button" class="admin-button admin-secondary" @onclick="LoadUsersAsync">Refresh</button>
+        </div>
+
+        @if (isLoading)
+        {
+            <p class="muted">Loading user accounts...</p>
+        }
+        else if (users.Count == 0)
+        {
+            <p class="muted">No accounts are available.</p>
+        }
+        else
+        {
+            <div class="users-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>User</th><th>Email</th><th>Role</th><th>Update role</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var user in users)
+                        {
+                            <tr @key="user.Id">
+                                <td>@user.DisplayName</td>
+                                <td>@user.Email</td>
+                                <td><span class="role-badge">@user.Role</span></td>
+                                <td>
+                                    <select class="form-control role-select" value="@user.Role"
+                                            aria-label="@($"Role for {user.Email}")"
+                                            @onchange="args => ChangeRoleAsync(user.Id, args.Value?.ToString())">
+                                        @foreach (var role in Roles)
+                                        {
+                                            <option value="@role">@role</option>
+                                        }
+                                    </select>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+</div>
+
+<style>
+    .admin-page { max-width: 1200px; margin: 0 auto; padding: 34px clamp(18px, 3vw, 42px); color: #17243a; }
+    header { margin-bottom: 24px; }
+    header h1 { margin: 0; font-size: clamp(26px, 3vw, 34px); }
+    header > p:last-child, .users-heading p { margin: 7px 0 0; color: #738198; font-size: 12px; }
+    .eyebrow { margin: 0 0 7px; color: #647796; font-size: 10px; font-weight: 800; letter-spacing: 1.5px; }
+    .admin-panel { margin-bottom: 16px; border: 1px solid #e7ebf2; border-radius: 12px; padding: 21px; background: white; box-shadow: 0 2px 6px #14223a08; }
+    h2 { margin: 0 0 16px; font-size: 16px; }
+    .create-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    label { display: block; margin-bottom: 6px; color: #495970; font-size: 11px; font-weight: 700; }
+    .form-control { box-sizing: border-box; width: 100%; border: 1px solid #dce2eb; border-radius: 7px; padding: 9px 10px; background: white; color: #17243a; font: inherit; font-size: 12px; }
+    .admin-actions, .users-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 16px; }
+    .admin-actions > span { color: #8995a8; font-size: 10px; }
+    .admin-button { border: 1px solid #3867d6; border-radius: 7px; padding: 9px 13px; background: #3867d6; color: white; font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
+    .admin-button:disabled { opacity: .6; cursor: wait; }
+    .admin-secondary { border-color: #dce2eb; background: white; color: #45536b; }
+    .users-heading { margin: 0 0 14px; }
+    .users-heading h2 { margin: 0; }
+    .users-table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 11px; }
+    th { padding: 10px; border-bottom: 1px solid #e7ebf2; color: #75839a; font-size: 9px; letter-spacing: .6px; text-transform: uppercase; }
+    td { padding: 10px; border-bottom: 1px solid #edf0f5; color: #526179; }
+    tr:last-child td { border-bottom: 0; }
+    .role-badge { border-radius: 16px; padding: 4px 8px; background: #eff3fa; color: #536884; font-size: 9px; font-weight: 700; }
+    .role-select { max-width: 170px; }
+    .muted { color: #8995a8; font-size: 12px; }
+    .notice { margin: 0 0 14px; border: 1px solid; border-radius: 8px; padding: 11px 14px; font-size: 12px; }
+    .notice-success { border-color: #b8e3cc; background: #effaf4; color: #31744e; }
+    .notice-error { border-color: #f0c4c0; background: #fff4f3; color: #a43e37; }
+    .validation-message, .validation-errors { color: #a43e37; font-size: 10px; }
+    @@media (max-width: 640px) {
+        .create-grid { grid-template-columns: 1fr; }
+        .admin-panel { padding: 15px; }
+        .admin-actions { align-items: flex-start; flex-direction: column; }
+        .users-heading { align-items: flex-start; }
+    }
+</style>
+
+@code {
+    private static readonly string[] Roles = ["Admin", "Agent", "Requester"];
+    private readonly NewUserInput newUser = new();
+    private List<ManagedUser> users = [];
+    private bool isLoading = true;
+    private bool isSaving;
+    private bool isError;
+    private string feedback = "";
+
+    protected override Task OnInitializedAsync() => LoadUsersAsync();
+
+    private async Task LoadUsersAsync()
+    {
+        isLoading = true;
+        try
+        {
+            users = (await UserAdmin.GetUsersAsync()).ToList();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Could not load user accounts: {ex}");
+            feedback = "Could not load user accounts. Check the application logs.";
+            isError = true;
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task CreateUserAsync()
+    {
+        if (isSaving)
+            return;
+
+        isSaving = true;
+        feedback = "";
+        try
+        {
+            await UserAdmin.CreateUserAsync(
+                newUser.Email,
+                newUser.DisplayName,
+                newUser.Password,
+                newUser.Role);
+            feedback = $"Created account for {newUser.Email}.";
+            isError = false;
+            newUser.Reset();
+            await LoadUsersAsync();
+        }
+        catch (ArgumentException ex)
+        {
+            feedback = ex.Message;
+            isError = true;
+        }
+        catch (InvalidOperationException ex)
+        {
+            feedback = ex.Message;
+            isError = true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Could not create user account: {ex}");
+            feedback = "Could not create the account. Check the application logs.";
+            isError = true;
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private async Task ChangeRoleAsync(string userId, string? role)
+    {
+        try
+        {
+            await UserAdmin.ChangeRoleAsync(userId, role);
+            feedback = "User role updated.";
+            isError = false;
+            await LoadUsersAsync();
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or KeyNotFoundException)
+        {
+            feedback = ex.Message;
+            isError = true;
+            await LoadUsersAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Could not update user role: {ex}");
+            feedback = "Could not update the role. Check the application logs.";
+            isError = true;
+        }
+    }
+
+    private sealed class NewUserInput
+    {
+        [Required]
+        [MaxLength(150)]
+        public string DisplayName { get; set; } = "";
+
+        [Required]
+        [EmailAddress]
+        public string Email { get; set; } = "";
+
+        [Required]
+        [DataType(DataType.Password)]
+        public string Password { get; set; } = "";
+
+        [Required]
+        public string Role { get; set; } = "Requester";
+
+        public void Reset()
+        {
+            DisplayName = "";
+            Email = "";
+            Password = "";
+            Role = "Requester";
+        }
+    }
+}

@@ -1,0 +1,56 @@
+@model LoginViewModel
+@{
+    ViewData["Title"] = "Sign in";
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@ViewData["Title"] · OpsHub</title>
+    <link rel="stylesheet" href="/lib/bootstrap/dist/css/bootstrap.min.css" />
+    <style>
+        body { min-height: 100vh; display: grid; place-items: center; margin: 0; background: #f5f7fb; color: #17243a; font-family: Arial, sans-serif; }
+        main { width: min(420px, calc(100% - 32px)); border: 1px solid #e7ebf2; border-radius: 14px; padding: 32px; background: #fff; box-shadow: 0 12px 40px #14223a12; }
+        .brand { display: flex; align-items: center; gap: 11px; margin-bottom: 28px; color: #17243a; text-decoration: none; }
+        .brand-mark { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 10px; background: #3867d6; color: white; font-weight: 800; }
+        .brand strong, .brand small { display: block; }
+        .brand small { margin-top: 3px; color: #738198; font-size: 9px; letter-spacing: 1px; }
+        h1 { margin: 0; font-size: 25px; }
+        .subtitle { margin: 7px 0 22px; color: #738198; font-size: 13px; }
+        label { display: block; margin: 14px 0 6px; color: #495970; font-size: 12px; font-weight: 700; }
+        .form-control { width: 100%; padding: 10px; font-size: 13px; }
+        .remember { display: flex; align-items: center; gap: 8px; margin: 14px 0; color: #64738a; font-size: 12px; }
+        .remember label { margin: 0; font-weight: 400; }
+        button { width: 100%; margin-top: 8px; border: 0; border-radius: 8px; padding: 11px; background: #3867d6; color: white; font-weight: 700; }
+        .validation-summary-errors { margin-bottom: 12px; color: #a43e37; font-size: 12px; }
+        .validation-summary-errors ul { margin: 0; padding-left: 20px; }
+        .field-validation-error { display: block; margin-top: 4px; color: #a43e37; font-size: 11px; }
+    </style>
+</head>
+<body>
+    <main>
+        <a class="brand" href="/">
+            <span class="brand-mark" aria-hidden="true">O</span>
+            <span><strong>OpsHub</strong><small>IT SERVICE DESK</small></span>
+        </a>
+        <h1>Welcome back</h1>
+        <p class="subtitle">Sign in to continue to the service desk.</p>
+        <form asp-controller="Account" asp-action="Login" method="post">
+            <div asp-validation-summary="ModelOnly"></div>
+            <input asp-for="ReturnUrl" type="hidden" />
+            <label asp-for="Email">Email address</label>
+            <input asp-for="Email" class="form-control" autocomplete="username" />
+            <span asp-validation-for="Email"></span>
+            <label asp-for="Password">Password</label>
+            <input asp-for="Password" class="form-control" autocomplete="current-password" />
+            <span asp-validation-for="Password"></span>
+            <div class="remember">
+                <input asp-for="RememberMe" />
+                <label asp-for="RememberMe">Keep me signed in</label>
+            </div>
+            <button type="submit">Sign in</button>
+        </form>
+    </main>
+</body>
+</html>

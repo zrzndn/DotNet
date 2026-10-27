@@ -1,6 +1,28 @@
 ﻿<Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
     <Found Context="routeData">
-        <RouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)" />
+        <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
+            <NotAuthorized Context="authState">
+                @if (authState.User.Identity?.IsAuthenticated == true)
+                {
+                    <section class="auth-message">
+                        <h1>Access denied</h1>
+                        <p>Your account does not have permission to access this page.</p>
+                        <a href="/account/access-denied">View access information</a>
+                    </section>
+                }
+                else
+                {
+                    <section class="auth-message">
+                        <h1>Sign in required</h1>
+                        <p>Sign in with your OpsHub account to continue.</p>
+                        <a href="/account/login">Sign in</a>
+                    </section>
+                }
+            </NotAuthorized>
+            <Authorizing>
+                <p class="auth-message">Checking access...</p>
+            </Authorizing>
+        </AuthorizeRouteView>
         <FocusOnNavigate RouteData="routeData" Selector="h1" />
     </Found>
 </Router>
