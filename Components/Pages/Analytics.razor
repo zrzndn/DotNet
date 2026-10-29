@@ -1,0 +1,979 @@
+@page "/analytics"
+@attribute [Authorize]
+@using System.Globalization
+@using OpsHub.Models
+@using OpsHub.Services
+@inject TicketService TicketsService
+@inject SlaCalculator SlaCalculator
+@inject ILogger<Analytics> Logger
+
+<PageTitle>OpsHub | Analytics</PageTitle>
+
+<div class="analytics-page">
+    <header class="page-header">
+        <div>
+            <p class="eyebrow">OPERATIONS ANALYTICS</p>
+            <h1>Analytics &amp; SLA monitoring</h1>
+            <p class="subtitle">Track service volume, SLA health, and workload across the team.</p>
+        </div>
+    </header>
+
+    @if (isLoading)
+    {
+        <section class="loading-state" aria-live="polite">
+            <span class="loading-indicator" aria-hidden="true"></span>
+            Loading analytics...
+        </section>
+    }
+    else if (loadFailed)
+    {
+        <section class="empty-state">
+            <h2>Analytics could not be loaded</h2>
+            <p>Check the application logs and try again.</p>
+            <button class="button button-secondary" type="button" @onclick="ReloadAsync">Try again</button>
+        </section>
+    }
+    else
+    {
+        <section class="panel analytics-filters" aria-label="Analytics filters">
+            <div class="panel-heading">
+                <div>
+                    <h2>Reporting filters</h2>
+                    <p>Scope the historical report and workload analysis.</p>
+                </div>
+            </div>
+
+            <div class="filter-grid">
+                <label>
+                    Start date
+                    <input type="date" class="form-control" @bind="reportStart" />
+                </label>
+                <label>
+                    End date
+                    <input type="date" class="form-control" @bind="reportEnd" />
+                </label>
+                <label>
+                    Priority
+                    <select class="form-control" @bind="selectedPriority">
+                        <option value="">All priorities</option>
+                        @foreach (var priority in Priorities)
+                        {
+                            <option value="@priority">@priority</option>
+                        }
+                    </select>
+                </label>
+                <label>
+                    Status
+                    <select class="form-control" @bind="selectedStatus">
+                        <option value="">All statuses</option>
+                        @foreach (var status in Statuses)
+                        {
+                            <option value="@status">@status</option>
+                        }
+                    </select>
+                </label>
+                <label>
+                    Assigned agent
+                    <select class="form-control" @bind="selectedAgent">
+                        <option value="">All agents</option>
+                        <option value="Unassigned">Unassigned</option>
+                        @foreach (var agent in AgentChoices)
+                        {
+                            <option value="@agent">@agent</option>
+                        }
+                    </select>
+                </label>
+                <label>
+                    Category
+                    <select class="form-control" @bind="selectedCategory">
+                        <option value="">All categories</option>
+                        @foreach (var category in Categories)
+                        {
+                            <option value="@category">@category</option>
+                        }
+                    </select>
+                </label>
+            </div>
+
+            <div class="preset-row" aria-label="Date presets">
+                <button type="button" class="button button-secondary" @onclick="() => ApplyPreset(PresetRange.Last7Days)">Last 7 days</button>
+                <button type="button" class="button button-secondary" @onclick="() => ApplyPreset(PresetRange.Last30Days)">Last 30 days</button>
+                <button type="button" class="button button-secondary" @onclick="() => ApplyPreset(PresetRange.CurrentMonth)">Current month</button>
+                <button type="button" class="button button-secondary" @onclick="ApplyCustomRange">Custom range</button>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(filterError))
+            {
+                <p class="notice notice-error" role="alert">@filterError</p>
+            }
+
+            <div class="filter-actions">
+                <button type="button" class="button button-primary" @onclick="ApplyFilters">Apply filters</button>
+                <button type="button" class="button button-secondary" @onclick="ResetFilters">Reset filters</button>
+            </div>
+        </section>
+
+        <section class="metrics-grid" aria-label="Operations overview metrics">
+            <article class="metric-card">
+                <span class="metric-icon icon-total" aria-hidden="true">#</span>
+                <p>Total tickets</p>
+                <strong>@HistoricalReport.TotalTickets</strong>
+                <span class="metric-caption">Created in @GetDateLabel(reportStart, reportEnd)</span>
+            </article>
+            <article class="metric-card">
+                <span class="metric-icon icon-open" aria-hidden="true">↗</span>
+                <p>Currently open</p>
+                <strong>@CurrentOpenCount</strong>
+                <span class="metric-caption">Current tickets matching filters; date range excluded</span>
+            </article>
+            <article class="metric-card @(CurrentOverdueCount > 0 ? "metric-alert" : "")">
+                <span class="metric-icon icon-overdue" aria-hidden="true">⌛</span>
+                <p>Overdue</p>
+                <strong>@CurrentOverdueCount</strong>
+                <span class="metric-caption">Current tickets matching filters; date range excluded</span>
+            </article>
+            <article class="metric-card">
+                <span class="metric-icon icon-resolved" aria-hidden="true">✓</span>
+                <p>SLA compliance</p>
+                <strong>@FormatPercent(HistoricalReport.SlaCompliancePercent)</strong>
+                <span class="metric-caption">Measured among resolved tickets with recorded SLA outcomes</span>
+            </article>
+            <article class="metric-card">
+                <span class="metric-icon icon-progress" aria-hidden="true">◷</span>
+                <p>Average resolution</p>
+                <strong>@FormatDuration(HistoricalReport.AverageResolutionTime)</strong>
+                <span class="metric-caption">Tickets created in the selected period and since resolved</span>
+            </article>
+        </section>
+
+        <section class="panel chart-panel">
+            <div class="panel-heading">
+                <div>
+                    <h2>Ticket trends</h2>
+                    <p>Created and resolved ticket volume over time.</p>
+                </div>
+                <div class="chart-controls">
+                    <label>
+                        Group by
+                        <select class="form-control" @bind="trendBucket">
+                            <option value="@AnalyticsGrouping.Day">Day</option>
+                            <option value="@AnalyticsGrouping.Week">Week</option>
+                            <option value="@AnalyticsGrouping.Month">Month</option>
+                        </select>
+                    </label>
+                </div>
+            </div>
+
+            @{
+                var trendPoints = TrendPoints;
+                var trendMaxValue = Math.Max(1, trendPoints
+                    .Select(point => Math.Max(point.Created, point.Resolved))
+                    .DefaultIfEmpty(0)
+                    .Max());
+            }
+            @if (!trendPoints.Any())
+            {
+                <p class="report-empty">No ticket activity matches the selected period.</p>
+            }
+            else
+            {
+                <div class="trend-chart" aria-label="Ticket trend chart">
+                    @foreach (var point in trendPoints)
+                    {
+                        var createdHeight = (int)Math.Round(point.Created * 100d / trendMaxValue);
+                        var resolvedHeight = (int)Math.Round(point.Resolved * 100d / trendMaxValue);
+
+                        <div class="trend-item" title="@point.Label: @point.Created created, @point.Resolved resolved">
+                            <div class="trend-bars" aria-label="@point.Label created @point.Created resolved @point.Resolved">
+                                <span class="trend-bar created" style="height:@(createdHeight)%"></span>
+                                <span class="trend-bar resolved" style="height:@(resolvedHeight)%"></span>
+                            </div>
+                            <small>@point.Label</small>
+                        </div>
+                    }
+                </div>
+            }
+        </section>
+
+        <section class="panel table-panel">
+            <div class="panel-heading">
+                <div>
+                    <h2>SLA monitoring</h2>
+                    <p>Unresolved tickets matching filters; date range applies to historical reports only.</p>
+                </div>
+                <a class="button button-secondary export-button" href="@CsvExportUrl">Export CSV</a>
+            </div>
+
+            @if (!SlaAttentionTickets.Any())
+            {
+                <p class="report-empty">No unresolved tickets require attention right now.</p>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th scope="col">Ticket</th>
+                                <th scope="col">Title</th>
+                                <th scope="col">Priority</th>
+                                <th scope="col">Status</th>
+                                <th scope="col">Assigned</th>
+                                <th scope="col">Created</th>
+                                <th scope="col">SLA deadline</th>
+                                <th scope="col">Time remaining</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var ticket in SlaAttentionTickets)
+                            {
+                                var assessment = SlaCalculator.Assess(ticket, DateTime.UtcNow);
+                                var statusClass = ticket.Status == "Resolved" ? "status-resolved" : assessment.State switch
+                                {
+                                    SlaState.Breached => "status-breached",
+                                    SlaState.AtRisk => "status-at-risk",
+                                    _ => "status-on-track"
+                                };
+                                <tr>
+                                    <td><a href="@($"/tickets/{ticket.Id}")">#@ticket.Id</a></td>
+                                    <td>@ticket.Title</td>
+                                    <td><span class="@GetPriorityClass(ticket.Priority)">@ticket.Priority</span></td>
+                                    <td><span class="@GetStatusClass(ticket.Status)">@ticket.Status</span></td>
+                                    <td>@(string.IsNullOrWhiteSpace(ticket.AssignedTechnician) ? "Unassigned" : ticket.AssignedTechnician)</td>
+                                    <td>@ticket.CreatedAtUtc.ToString("MMM d, yyyy", CultureInfo.InvariantCulture)</td>
+                                    <td class="@(assessment.State == SlaState.Breached ? "overdue" : string.Empty)">
+                                        @(ticket.SlaDueAtUtc is DateTime deadline ? deadline.ToString("MMM d, yyyy h:mm tt", CultureInfo.InvariantCulture) : "No SLA deadline")
+                                    </td>
+                                    <td class="@statusClass">
+                                        @(ticket.SlaDueAtUtc is DateTime ? GetRemainingLabel(ticket) : "No SLA deadline")
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <section class="panel workload-panel">
+            <div class="panel-heading">
+                <div>
+                    <h2>Agent workload analysis</h2>
+                    <p>Current assignment load, SLA pressure, and recent resolution performance.</p>
+                </div>
+            </div>
+
+            @{
+                var workloadRows = AgentWorkloadRows;
+                var maxOpenTickets = Math.Max(1, workloadRows
+                    .Select(row => row.OpenTickets)
+                    .DefaultIfEmpty(0)
+                    .Max());
+            }
+            @if (!workloadRows.Any())
+            {
+                <p class="report-empty">No agent workload data is available for the current filters.</p>
+            }
+            else
+            {
+                <div class="workload-list" aria-label="Agent workload list">
+                    @foreach (var row in workloadRows)
+                    {
+                        var width = row.OpenTickets * 100d / maxOpenTickets;
+                        <div class="workload-row">
+                            <div class="workload-head">
+                                <strong>@row.Name</strong>
+                                <span>@row.OpenTickets open · @row.OverdueTickets overdue</span>
+                            </div>
+                            <div class="workload-bar-track" aria-label="@row.Name open tickets">
+                                <span class="workload-bar" style="width:@(width)%"></span>
+                            </div>
+                            <div class="workload-metrics">
+                                <span>Resolved: @row.ResolvedInPeriod</span>
+                                <span>Avg resolution: @(row.AverageResolution is TimeSpan duration ? FormatDuration(duration) : "n/a")</span>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </section>
+    }
+</div>
+
+<style>
+    .analytics-page {
+        --surface: #ffffff;
+        --surface-alt: #f8fbff;
+        --line: #e5edf8;
+        --ink: #122033;
+        --muted: #62738b;
+        --blue: #2563eb;
+        --blue-soft: #dfeaff;
+        --green: #16a34a;
+        --green-soft: #dcfce7;
+        --amber: #d97706;
+        --amber-soft: #fef3c7;
+        --red: #dc2626;
+        --red-soft: #fee2e2;
+        --purple: #7c3aed;
+        --shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+    }
+
+    .analytics-page {
+        display: grid;
+        gap: 1.25rem;
+        color: var(--ink);
+    }
+
+    .page-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 1.1rem 1.25rem 0.2rem;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+    }
+
+    .eyebrow {
+        margin: 0 0 0.35rem;
+        color: #5b7dd4;
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+    }
+
+    .page-header h1 {
+        margin: 0;
+        font-size: clamp(2rem, 3vw, 2.6rem);
+        line-height: 1.1;
+        letter-spacing: -0.04em;
+    }
+
+    .subtitle {
+        margin: 0.45rem 0 0;
+        color: var(--muted);
+        font-size: 0.96rem;
+    }
+
+    .analytics-filters,
+    .chart-panel,
+    .table-panel,
+    .workload-panel {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 1rem;
+        box-shadow: var(--shadow);
+        padding: 1.2rem 1.2rem 1.1rem;
+    }
+
+    .panel-heading {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin-bottom: 1rem;
+    }
+
+    .panel-heading h2 {
+        margin: 0;
+        font-size: 1.1rem;
+        letter-spacing: -0.02em;
+    }
+
+    .panel-heading p {
+        margin: 0.3rem 0 0;
+        color: var(--muted);
+        font-size: 0.82rem;
+    }
+
+    .filter-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 1rem;
+    }
+
+    .filter-grid label,
+    .chart-controls label {
+        display: grid;
+        gap: 0.45rem;
+        color: var(--muted);
+        font-size: 0.8rem;
+        font-weight: 700;
+    }
+
+    .form-control {
+        border: 1px solid #d9e1ef;
+        border-radius: 0.7rem;
+        background: #f9fbff;
+        padding: 0.7rem 0.8rem;
+        color: var(--ink);
+        font-size: 0.9rem;
+    }
+
+    .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid transparent;
+        border-radius: 0.7rem;
+        padding: 0.7rem 1rem;
+        font-weight: 700;
+        font-size: 0.85rem;
+        line-height: 1;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+
+    .button:hover {
+        transform: translateY(-1px);
+    }
+
+    .button-primary {
+        background: linear-gradient(135deg, #2563eb, #1d4ed8);
+        color: #fff;
+        box-shadow: 0 8px 18px rgba(37, 99, 235, 0.22);
+    }
+
+    .button-secondary {
+        background: #edf4ff;
+        border-color: #dfeafc;
+        color: #23498c;
+    }
+
+    .preset-row,
+    .filter-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        margin-top: 1rem;
+    }
+
+    .metrics-grid {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 1rem;
+    }
+
+    .metric-card {
+        position: relative;
+        display: grid;
+        gap: 0.45rem;
+        min-height: 155px;
+        padding: 1.1rem 1rem 0.95rem;
+        background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+        border: 1px solid var(--line);
+        border-radius: 1rem;
+        box-shadow: var(--shadow);
+    }
+
+    .metric-card p {
+        margin: 0;
+        color: var(--muted);
+        font-weight: 700;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }
+
+    .metric-card strong {
+        font-size: clamp(1.7rem, 2vw, 2.25rem);
+        line-height: 1.1;
+        letter-spacing: -0.05em;
+    }
+
+    .metric-caption {
+        color: var(--muted);
+        font-size: 0.75rem;
+        line-height: 1.4;
+    }
+
+    .metric-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 2.25rem;
+        height: 2.25rem;
+        border-radius: 0.8rem;
+        font-size: 1.1rem;
+        font-weight: 700;
+        background: #edf4ff;
+        color: var(--blue);
+    }
+
+    .icon-total { background: #edf4ff; color: #1d4ed8; }
+    .icon-open { background: #e0f2fe; color: #0369a1; }
+    .icon-overdue { background: #fee2e2; color: #b91c1c; }
+    .icon-resolved { background: #dcfce7; color: #15803d; }
+    .icon-progress { background: #fef3c7; color: #b45309; }
+
+    .metric-alert {
+        border-color: rgba(220, 38, 38, 0.22);
+        background: linear-gradient(180deg, #fff5f5 0%, #fffaf8 100%);
+    }
+
+    .metric-alert .metric-icon {
+        background: #fee2e2;
+        color: #b91c1c;
+    }
+
+    .trend-chart {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(60px, 1fr));
+        align-items: end;
+        gap: 0.8rem;
+        min-height: 220px;
+        padding: 1rem 0.15rem 0.25rem;
+    }
+
+    .trend-item {
+        display: grid;
+        justify-items: center;
+        gap: 0.4rem;
+    }
+
+    .trend-bars {
+        display: flex;
+        align-items: end;
+        justify-content: center;
+        gap: 0.25rem;
+        width: 100%;
+        height: 160px;
+        padding: 0.55rem 0.4rem 0;
+        border-radius: 0.8rem;
+        background: linear-gradient(180deg, #f8fbff 0%, #ecf4ff 100%);
+        border: 1px solid #edf3ff;
+    }
+
+    .trend-bar {
+        display: block;
+        width: 18px;
+        min-height: 0;
+        border-radius: 0.5rem 0.5rem 0 0;
+    }
+
+    .trend-bar.created { background: linear-gradient(180deg, #60a5fa 0%, #2563eb 100%); }
+    .trend-bar.resolved { background: linear-gradient(180deg, #34d399 0%, #16a34a 100%); }
+
+    .trend-item small {
+        color: var(--muted);
+        font-size: 0.7rem;
+    }
+
+    .table-wrap {
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 0.9rem;
+    }
+
+    table {
+        width: 100%;
+        min-width: 900px;
+        border-collapse: collapse;
+        font-size: 0.84rem;
+    }
+
+    thead {
+        background: #f8fbff;
+    }
+
+    th {
+        padding: 0.85rem 0.9rem;
+        border-bottom: 1px solid var(--line);
+        color: #5a6e8b;
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        text-align: left;
+    }
+
+    td {
+        padding: 0.9rem;
+        border-bottom: 1px solid #edf3fb;
+        color: #384b67;
+        vertical-align: middle;
+    }
+
+    tbody tr:hover {
+        background: #fafcff;
+    }
+
+    td a {
+        color: #1d4ed8;
+        font-weight: 700;
+        text-decoration: none;
+    }
+
+    td a:hover {
+        text-decoration: underline;
+    }
+
+    .workload-list {
+        display: grid;
+        gap: 1rem;
+    }
+
+    .workload-row {
+        display: grid;
+        gap: 0.5rem;
+        padding: 0.9rem 0.8rem;
+        border: 1px solid var(--line);
+        border-radius: 0.8rem;
+        background: linear-gradient(180deg, #fbfdff 0%, #f7faff 100%);
+    }
+
+    .workload-head,
+    .workload-metrics {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        color: var(--muted);
+        font-size: 0.8rem;
+    }
+
+    .workload-bar-track {
+        height: 0.8rem;
+        background: #e8eef8;
+        border-radius: 999px;
+        overflow: hidden;
+    }
+
+    .workload-bar {
+        display: block;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #7dd3fc 0%, #2563eb 100%);
+    }
+
+    .notice {
+        margin: 0.85rem 0 0;
+        border-radius: 0.7rem;
+        padding: 0.8rem 0.9rem;
+        font-size: 0.82rem;
+        font-weight: 600;
+    }
+
+    .notice-error {
+        border: 1px solid #fecaca;
+        background: #fff1f2;
+        color: #b91c1c;
+    }
+
+    .report-empty {
+        margin: 0;
+        padding: 1rem 0 0;
+        color: var(--muted);
+        font-size: 0.9rem;
+    }
+
+    @@media (max-width: 1100px) {
+        .metrics-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+    }
+
+    @@media (max-width: 720px) {
+        .page-header {
+            padding-left: 0.4rem;
+            padding-right: 0.4rem;
+        }
+
+        .metrics-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .filter-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .panel-heading {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+    }
+</style>
+
+@code {
+    private const string UnassignedLabel = "Unassigned";
+    private static readonly string[] Priorities = ["Low", "Medium", "High", "Critical"];
+    private static readonly string[] Statuses = ["Open", "In Progress", "Resolved"];
+    private static readonly string[] Categories = ["Hardware", "Network", "Software", "Access and Accounts"];
+
+    private bool isLoading;
+    private bool loadFailed;
+    private string? filterError;
+
+    private IReadOnlyList<SupportTicket> allTickets = [];
+    private DateOnly reportStart = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-29));
+    private DateOnly reportEnd = DateOnly.FromDateTime(DateTime.UtcNow);
+    private string selectedPriority = string.Empty;
+    private string selectedStatus = string.Empty;
+    private string selectedCategory = string.Empty;
+    private string selectedAgent = string.Empty;
+    private AnalyticsGrouping trendBucket = AnalyticsGrouping.Day;
+
+    private TicketReport HistoricalReport => TicketReportCalculator.Calculate(ReportingTickets);
+
+    private IReadOnlyList<SupportTicket> ReportingTickets =>
+        ApplyFilters(allTickets, includeDateRange: true).ToList();
+
+    private IReadOnlyList<SupportTicket> CurrentStateTickets =>
+        ApplyFilters(allTickets, includeDateRange: false).ToList();
+
+    private int CurrentOpenCount =>
+        CurrentStateTickets.Count(ticket => ticket.Status != "Resolved");
+
+    private int CurrentOverdueCount =>
+        CurrentStateTickets.Count(IsOverdue);
+
+    private IReadOnlyList<AnalyticsTrendPoint> TrendPoints =>
+        reportStart > reportEnd
+            ? []
+            : OperationsAnalyticsCalculator.BuildTrendPoints(
+                CurrentStateTickets,
+                reportStart,
+                reportEnd,
+                trendBucket);
+
+    private IReadOnlyList<SupportTicket> SlaAttentionTickets =>
+        CurrentStateTickets
+            .Where(ticket => ticket.Status != "Resolved")
+            .OrderBy(ticket => ticket.SlaDueAtUtc ?? DateTime.MaxValue)
+            .ThenByDescending(ticket => ticket.Priority == "Critical")
+            .ThenByDescending(ticket => ticket.Priority == "High")
+            .ThenByDescending(ticket => ticket.Priority == "Medium")
+            .ToList();
+
+    private IReadOnlyList<string> AgentChoices =>
+        allTickets
+            .Select(ticket => string.IsNullOrWhiteSpace(ticket.AssignedTechnician)
+                ? UnassignedLabel
+                : ticket.AssignedTechnician)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(agent => agent, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private IReadOnlyList<AgentWorkloadMetric> AgentWorkloadRows =>
+        reportStart > reportEnd
+            ? []
+            : OperationsAnalyticsCalculator.CalculateAgentWorkload(
+                CurrentStateTickets,
+                reportStart,
+                reportEnd,
+                DateTime.UtcNow,
+                SlaCalculator);
+
+    private string CsvExportUrl => BuildCsvExportUrl();
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        isLoading = true;
+        loadFailed = false;
+        try
+        {
+            allTickets = await TicketsService.GetAllAsync();
+            if (!allTickets.Any())
+            {
+                reportStart = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-29));
+                reportEnd = DateOnly.FromDateTime(DateTime.UtcNow);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Could not load operations analytics.");
+            loadFailed = true;
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void ApplyFilters()
+    {
+        if (reportStart > reportEnd)
+        {
+            filterError = "The start date must be on or before the end date.";
+            return;
+        }
+
+        filterError = null;
+    }
+
+    private void ResetFilters()
+    {
+        reportStart = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-29));
+        reportEnd = DateOnly.FromDateTime(DateTime.UtcNow);
+        selectedPriority = string.Empty;
+        selectedStatus = string.Empty;
+        selectedCategory = string.Empty;
+        selectedAgent = string.Empty;
+        trendBucket = AnalyticsGrouping.Day;
+        filterError = null;
+    }
+
+    private void ApplyPreset(PresetRange preset)
+    {
+        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        switch (preset)
+        {
+            case PresetRange.Last7Days:
+                reportStart = today.AddDays(-6);
+                reportEnd = today;
+                break;
+            case PresetRange.Last30Days:
+                reportStart = today.AddDays(-29);
+                reportEnd = today;
+                break;
+            case PresetRange.CurrentMonth:
+                reportStart = new DateOnly(today.Year, today.Month, 1);
+                reportEnd = today;
+                break;
+            default:
+                reportStart = today.AddDays(-29);
+                reportEnd = today;
+                break;
+        }
+
+        filterError = null;
+    }
+
+    private void ApplyCustomRange()
+    {
+        filterError = null;
+    }
+
+    private IEnumerable<SupportTicket> ApplyFilters(
+        IEnumerable<SupportTicket> tickets,
+        bool includeDateRange)
+    {
+        IEnumerable<SupportTicket> query = tickets;
+
+        if (!string.IsNullOrWhiteSpace(selectedPriority))
+            query = query.Where(ticket => ticket.Priority == selectedPriority);
+
+        if (!string.IsNullOrWhiteSpace(selectedStatus))
+            query = query.Where(ticket => ticket.Status == selectedStatus);
+
+        if (!string.IsNullOrWhiteSpace(selectedCategory))
+            query = query.Where(ticket => ticket.Category == selectedCategory);
+
+        if (!string.IsNullOrWhiteSpace(selectedAgent))
+        {
+            query = query.Where(ticket =>
+                string.IsNullOrWhiteSpace(ticket.AssignedTechnician)
+                    ? selectedAgent == UnassignedLabel
+                    : ticket.AssignedTechnician == selectedAgent);
+        }
+
+        if (includeDateRange)
+        {
+            var startUtc = reportStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+            var endUtcExclusive = reportEnd == DateOnly.MaxValue
+                ? DateTime.MaxValue
+                : reportEnd.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+            query = query.Where(ticket => ticket.CreatedAtUtc >= startUtc &&
+                ticket.CreatedAtUtc < endUtcExclusive);
+        }
+
+        return query;
+    }
+
+    private bool IsOverdue(SupportTicket ticket) =>
+        ticket.Status != "Resolved" &&
+        SlaCalculator.Assess(ticket, DateTime.UtcNow).State == SlaState.Breached;
+
+    private string GetSlaLabel(SupportTicket ticket)
+    {
+        var assessment = SlaCalculator.Assess(ticket, DateTime.UtcNow);
+        return assessment.State switch
+        {
+            SlaState.Met => "Met",
+            SlaState.Breached => "Breached",
+            SlaState.AtRisk => "At risk",
+            SlaState.OnTrack => "On track",
+            _ => "Not tracked"
+        };
+    }
+
+    private string GetRemainingLabel(SupportTicket ticket)
+    {
+        if (ticket.SlaDueAtUtc is not DateTime deadline)
+            return "No SLA deadline";
+
+        var remaining = deadline - DateTime.UtcNow;
+        if (remaining <= TimeSpan.Zero)
+            return $"{Math.Abs(remaining.TotalHours):0}h overdue";
+
+        return $"{remaining.TotalHours:0.0}h remaining";
+    }
+
+    private string GetPriorityClass(string priority) => priority switch
+    {
+        "Critical" => "priority-critical",
+        "High" => "priority-high",
+        "Medium" => "priority-medium",
+        "Low" => "priority-low",
+        _ => "priority-default"
+    };
+
+    private string GetStatusClass(string status) => status switch
+    {
+        "Resolved" => "status-resolved",
+        "In Progress" => "status-progress",
+        _ => "status-open"
+    };
+
+    private static string FormatDuration(TimeSpan? duration)
+    {
+        if (duration is not TimeSpan value)
+            return "n/a";
+
+        if (value.TotalDays >= 1)
+            return $"{value.TotalDays:0.0}d";
+
+        if (value.TotalHours >= 1)
+            return $"{value.TotalHours:0.0}h";
+
+        return $"{value.TotalMinutes:0.0}m";
+    }
+
+    private static string FormatPercent(double? value) =>
+        value is null ? "n/a" : $"{value:0.0}%";
+
+    private string GetDateLabel(DateOnly start, DateOnly end) =>
+        start == end ? start.ToString("MMM d, yyyy", CultureInfo.InvariantCulture)
+            : $"{start:MMM d, yyyy}–{end:MMM d, yyyy}";
+
+    private string BuildCsvExportUrl()
+    {
+        var query = new List<string>();
+        if (reportStart != default)
+            query.Add($"from={reportStart:yyyy-MM-dd}");
+        if (reportEnd != default)
+            query.Add($"to={reportEnd:yyyy-MM-dd}");
+        if (!string.IsNullOrWhiteSpace(selectedPriority))
+            query.Add($"priority={Uri.EscapeDataString(selectedPriority)}");
+        if (!string.IsNullOrWhiteSpace(selectedStatus))
+            query.Add($"status={Uri.EscapeDataString(selectedStatus)}");
+        if (!string.IsNullOrWhiteSpace(selectedCategory))
+            query.Add($"category={Uri.EscapeDataString(selectedCategory)}");
+        if (!string.IsNullOrWhiteSpace(selectedAgent))
+            query.Add($"assigned={Uri.EscapeDataString(selectedAgent)}");
+
+        var suffix = query.Count == 0 ? string.Empty : $"?{string.Join("&", query)}";
+        return $"/reports/tickets.csv{suffix}";
+    }
+
+    private enum PresetRange
+    {
+        Last7Days,
+        Last30Days,
+        CurrentMonth
+    }
+
+}
